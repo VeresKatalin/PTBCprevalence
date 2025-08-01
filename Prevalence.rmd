@@ -1,0 +1,443 @@
+---
+title: "Estimation of paratuberculosis infection prevalence of diary herds"
+output: word_document
+date: "`r Sys.Date()`"
+params:
+  filename: NULL
+  countryname: NULL
+  iter: NULL
+  parA: NULL
+  parB: NULL
+  parC: NULL
+  Sp_const: NULL
+  alphamu1: NULL
+  betamu1: NULL
+  alphamu2: NULL
+  betamu2: NULL
+  alphaHTP: NULL
+  betaHTP: NULL
+  alphasigmasq: NULL
+  betasigmasq: NULL
+  alphasigm1sq: NULL
+  betasigm1sq: NULL
+  alphasigm2sq: NULL
+  betasigm2sq: NULL
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE,  warning=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+##########################################################################
+# Bayesian modelling in practice
+# Estimate the paratuberculosis infection prevalence of diary herds
+# Veres Katalin, Lang Zsolt, Monostori Attila, Ózsvári László 
+# 2025                                                      
+##########################################################################
+# R code 
+#
+# Input data: long format, one line per cow, age of cows, parity of cows, test result of cows
+# Output data: Excel and pdf file  with the estimation
+##########################################################################
+# Use: 
+# Create a csv file with the data of the cows, Use template.csv as template
+# Install stan, install rstan, openxlsx, ggplot2, ggridges and cowplot libraries
+##########################################################################
+# loading necessary libraries
+  library(rstan)
+  library(ggplot2)
+  library(ggridges)
+  library(cowplot)
+  library(openxlsx)
+  library(stringr)
+  library(bridgesampling)
+  library(knitr)
+
+  filename = params$filename
+  myfile=paste0(filename,".csv")
+  PTBCdata = read.table(myfile, sep=";", dec=",", 
+                        header=T)
+
+# Defining age groups
+# 1.75, 2.00, ..., 2.75 years (increment=0.25) - 5 groups 
+# 3.00, 3.33, ..., 4.33 years (increment=0.33) - 5 groupspcs
+# 4.50, 5.00, 5.50, ..., 16 years (increment=0.5) - 24 groups
+  PTBCdata$AGE<-as.numeric(PTBCdata$AGE)
+  
+  PTBCdata[PTBCdata$AGE<=3,"AGEG"] =
+    round(4*PTBCdata[PTBCdata$AGE<=3,"AGE"])/4
+  
+  PTBCdata[PTBCdata$AGE>3 & PTBCdata$AGE<=4.5,"AGEG"] =
+    round(3*PTBCdata[PTBCdata$AGE>3 & PTBCdata$AGE<=4.5,"AGE"])/3
+  
+  PTBCdata[PTBCdata$AGE>4.5,"AGEG"] =
+    round(2*PTBCdata[PTBCdata$AGE>4.5,"AGE"])/2
+  
+  PTBCdata$AGEG = round(PTBCdata$AGEG,3)
+  
+  PTBCdata$one = 1 # auxiliary variable
+
+
+##############################################################
+# Creating modell input: Aggregated data
+##############################################################  
+# Number of primiparous and multiparous cows, counts of positive tests
+  
+  PTBCHerdDat = aggregate(
+    data.frame(
+      POS  = PTBCdata$POS,
+      nCOW = PTBCdata$one),
+    list(
+      MULTIPAR = PTBCdata$MULTIPAR,
+      HERD_ID  = PTBCdata$HERD_ID
+      ),
+    sum)
+  PTBCHerdDat$percent<-PTBCHerdDat$POS/PTBCHerdDat$nCOW #Látszólagos prevalencia
+
+#Number of primiparous and multiparous cows, counts of positive tests
+#by agegroups
+  
+  PTBCHerd2 = aggregate(
+    data.frame(
+      POS  = PTBCdata$POS,
+      nCOW = PTBCdata$one),
+    list(
+      AGEG     = PTBCdata$AGEG,
+      MULTIPAR = PTBCdata$MULTIPAR,
+      HERD_ID  = PTBCdata$HERD_ID),
+    sum)
+  
+  PTBCHerd2$one = 1 # auxiliary variable
+  
+  #Count of age groups for primiparous and multiparous cows
+  PTBCHerd3 = aggregate(
+    data.frame(
+      nRec = PTBCHerd2$one),
+    list(
+      MULTIPAR = PTBCHerd2$MULTIPAR,
+      HERD_ID  = PTBCHerd2$HERD_ID),
+    sum)
+  
+    # Count of age groups for primiparous cows
+    nAgegr_primi = PTBCHerd3$nRec[1]
+  
+    # Age groups (all cows), vector
+    AgeG = PTBCHerd2$AGEG
+
+    # Count of age groups (all cows)
+    nAllRec = nrow(PTBCHerd2)
+##########################################################################
+# Bayesian analysis
+#
+# List of input data
+LData =
+  list(
+    nAllRec = nAllRec,             # Count of age groups (all cows)
+    nAgegr_primi   = nAgegr_primi, # Count of age groups for primiparous cows
+    nCOW    = PTBCHerd2$nCOW,      # Count of primiparous and multiparous cows by agegroup 
+    POS     = PTBCHerd2$POS,       # Count of primiparous and multiparous cows with positive test by agegroup
+    AgeG    = AgeG,                 # Age groups (all cows), vector
+    alphamu1 = params$alphamu1,       #alpha parameter of the beta prior for mean conditional within herd prevalence of primiparous cows
+    betamu1 = params$betamu1,        #beta parameter of the beta prior for mean conditional within herd prevalence of primiparous cows
+    alphamu2 = params$alphamu2,       #alpha parameter of the beta prior for mean conditional within herd prevalence of primiparous cows
+    betamu2 = params$betamu2,        #beta parameter of the beta prior for mean conditional within herd prevalence of primiparous cows
+    Sp_const= params$Sp_const,   #value of Sp if constant
+    parA = params$parA,
+    parB = params$parB,
+    parC = params$parC,
+    alphasigmasq = params$alphasigmasq,
+    betasigmasq = params$betasigmasq,
+    alphasigm1sq = params$alphasigm1sq,
+    betasigm1sq = params$betasigm1sq,
+    alphasigm2sq = params$alphasigm2sq,
+    betasigm2sq = params$betasigm2sq
+    )   
+
+  #initialize stan
+  options(mc.cores = parallel::detectCores())
+  rstan_options(auto_write = TRUE)
+  Sys.setenv(LOCAL_CPPFLAGS = '-march=corei7 -mtune=corei7')
+  
+  # Garbage Collection 
+  gc()
+
+  # Translating stan
+  mystanfileH0 = paste0("Prevalence_oneherd_H0.stan")
+  mystanfileH1 = paste0("Prevalence_oneherd_H1.stan")
+  PTBC_fit_H0 = stan(paste0(mystanfileH0), data=LData, chains=4, iter=params$iter, control = list(adapt_delta = 0.99,stepsize=0.1), seed = 1085417771)
+
+  sPTBC  = summary(PTBC_fit_H0)
+  sTable = sPTBC$summary
+ 
+   sTable1 = sTable[c("mu1", "mu2", "CWHP1","CWHP2"),
+                  c("mean","2.5%","97.5%")]
+  sTable2 = sTable[c("CWHP1","CWHP2"),
+                   c("mean","2.5%","97.5%")]
+    sTable3 = sTable[c("pi1","pi2"),
+                   c("mean","2.5%","97.5%")]
+  print(sTable1,digits=2)
+  traceplot(PTBC_fit_H0, pars = c("CWHP1","CWHP2"), inc_warmup = FALSE, nrow = 2)
+  
+  PTBC_fit_H1 = stan(mystanfileH1, data=LData, chains=4, iter=params$iter, control = list(adapt_delta = 0.99,stepsize=0.1), seed = 1085417771)
+
+#Bayes factor
+  #log marginal likelhood
+H0.bridge <- bridge_sampler(PTBC_fit_H0, silent=TRUE)
+H1.bridge <- bridge_sampler(PTBC_fit_H1, silent=TRUE)
+
+ #bayes factor 
+  BF01<- bf(H0.bridge, H1.bridge)
+  #posterior probabilities of the models without prior HTP
+  post1<-post_prob(H0.bridge,H1.bridge)
+  
+  alphaHTP <- params$alphaHTP
+  betaHTP <- params$betaHTP
+  
+  # sampling from HTP prior (HTP ~ Beta(alphaHTP, betaHTP)),p(M1)
+  set.seed(71194452)
+  htp_samples <- rbeta(20000, alphaHTP, betaHTP)
+  # Posterior model probability
+  BF01_n<-BF01$bf
+  posterior_pM1 <- if (is.infinite(BF01_n)) {
+  rep(1, length(htp_samples))
+} else {
+  (BF01_n * htp_samples) / (BF01_n * htp_samples + (1 - htp_samples))
+}
+  
+  posterior_pM2 <- 1 - posterior_pM1
+  mPM1<-round(as.numeric(mean(posterior_pM1)) * 100, 2)
+  KI_loPM1<-round(as.numeric(quantile(posterior_pM1, 0.025)) * 100, 2)
+  KI_hiPM1<-round(as.numeric(quantile(posterior_pM1, 0.975)) * 100, 2)
+  mPM2<-round(as.numeric(mean(posterior_pM2)) * 100, 2)
+  KI_loPM2<-round(as.numeric(quantile(posterior_pM2, 0.025)) * 100, 2)
+  KI_hiPM2<-round(as.numeric(quantile(posterior_pM2, 0.975)) * 100, 2)
+  
+#creating output
+  #tranforming result
+ sTable4<-cbind(c(PTBCHerdDat$percent[1],PTBCHerdDat$percent[2]), sTable2)
+  sTable4<-as.data.frame(round(sTable4,3))
+  colnames(sTable4)=c('Apparent prevalence', 'Estimate for true prevalence', 'Lower bound of 95% CrI','Upper bound of 95% CrI' )
+  rownames(sTable4)=c('Primiparous cows', 'Multiparous cows')
+  
+  Bayes_table <- matrix(
+  c('', BF01_n, paste0(mPM1,"% (", KI_loPM1, ", ", KI_hiPM1, ")" ), paste0(mPM2,"% (", KI_loPM2, ", ", KI_hiPM2, ")" )),
+  nrow = 2,
+  byrow = FALSE
+)
+
+rownames(Bayes_table) <- c("Herd is infected", "Herd is not infected")
+colnames(Bayes_table) <- c(
+  "Bayes factor",
+  "Posterior probability (95% KI)"
+)
+
+
+Bayes_table_df <- as.data.frame(Bayes_table)
+
+ #statistics
+  n_primi <- PTBCHerdDat$nCOW[1]
+  n_multi <- PTBCHerdDat$nCOW[2]
+  herd_size <- n_primi+n_multi
+  num_seropos_primi<- PTBCHerdDat$POS[1]
+  num_seropos_multi<- PTBCHerdDat$POS[2]
+  num_seropos <- num_seropos_primi+num_seropos_multi
+  apparent_prev_primi <- num_seropos_primi / n_primi
+  apparent_prev_multi <- num_seropos_multi / n_multi
+  apparent_prev <- num_seropos / herd_size
+  primi_prop <- n_primi/herd_size
+  multi_prop <- n_primi/herd_size
+  
+    Stat_table <- matrix(
+  c(n_primi, n_multi, herd_size, 
+    '','', paste0(mPM1," (", KI_loPM1, ", ", KI_hiPM1, ")" ),
+    round(apparent_prev_primi*100,2),
+    round(apparent_prev_multi*100,2),
+    round(apparent_prev*100,2),
+    paste0(round(sTable3[1,1]*100,2)," (", round(sTable3[1,2],2), ", ", round(sTable3[1,3],2), ")" ),
+    paste0(round(sTable3[2,1]*100,2)," (", round(sTable3[2,2],2), ", ", round(sTable3[2,3],2), ")" ),
+    "",
+    paste0(round(sTable2[1,1]*100,2)," (", round(sTable2[1,2],2), ", ", round(sTable2[1,3],2), ")" ),
+    paste0(round(sTable2[2,1]*100,2)," (", round(sTable2[2,2],2), ", ", round(sTable2[2,3],2), ")" ),          paste0(round((primi_prop*sTable2[2,1]+multi_prop*sTable2[2,2])*100,2))),
+  nrow = 3,
+  byrow = FALSE
+)
+    
+rownames(Stat_table) <- c( "Primiparous cow", "Multiparous cow", "Overall" )
+colnames(Stat_table) <- c("Herd size", "Infection probability of the herd", "Apparent prevalence", "Apparent prevalence from the model ","True prevalence")
+
+    Stat_table_df <- as.data.frame(Stat_table)
+
+  #save results into excel
+wb <- createWorkbook(creator = Sys.getenv("USERNAME"))
+  addWorksheet(wb, "Estimate")
+  setColWidths(
+    wb,
+    "Estimate",
+    c(2,3,4,5),
+    widths = 25
+  )
+  setColWidths(
+    wb,
+    "Estimate",
+    c(1),
+    widths = 42
+  )
+  # Create a percent style
+  pct = createStyle(numFmt="0.0%")
+  boldStyle <- createStyle(textDecoration = "bold")
+  writeData(wb, "Estimate", sTable4, rowNames = TRUE)
+  writeData(wb, "Estimate", Bayes_table_df, rowNames = TRUE, startCol = 1, startRow = 6)
+   writeData(wb, "Estimate", Stat_table_df, rowNames = TRUE, startCol = 1, startRow = 10)
+  addStyle(wb, "Estimate", style=pct, cols=c(2,3,4,5), rows=2:(nrow(sTable4)+1), gridExpand=TRUE)
+  addStyle(wb, "Estimate", style=pct, cols=c(3,4), rows=7:8, gridExpand=TRUE)
+  addStyle(wb, "Estimate", style = boldStyle, rows = c(1), cols = c(2,3,4,5), gridExpand = FALSE)
+  addStyle(wb, "Estimate", style = boldStyle, rows = c(6), cols = c(2,3,4), gridExpand = FALSE)
+  # add date to the filename
+  today <- Sys.Date()
+  # filename!
+  estimate_name = "Estimates"
+  myfile <- paste0(estimate_name,"_", params$countryname, "_", filename, "_", today, ".xlsx")
+  saveWorkbook(wb, file=myfile, overwrite = TRUE)
+
+########################################################## 
+#retrieve priors from parameters
+    
+  alphaHTP <- params$alphaHTP
+  betaHTP <- params$betaHTP
+  alphamu1 <- params$alphamu1
+  betamu1 <- params$betamu1
+  alphamu2 <- params$alphamu2
+  betamu2 <- params$betamu2
+  alphasigmasq <- params$alphasigmasq
+  betasigmasq <- params$betasigmasq
+  alphasigm1sq <- params$alphasigm1sq
+  betasigm1sq <- params$betasigm1sq
+  alphasigm2sq <- params$alphasigm2sq
+  betasigm2sq <- params$betasigm2sq
+
+Sp_const <- params$Sp_const
+mySp <- Sp_const
+```
+**Input data:** `r filename`.csv  
+**Country:** `r params$countryname`    
+
+## Priors used in stan modell
+
+**HTP of the region:** beta(`r alphaHTP`, `r betaHTP`)  
+**Sensitivity:** Age-dependent    
+**Specificity:** `r Sp_const`    
+**Mean CWHP1:** beta(`r alphamu1`, `r betamu1`)  
+**Mean CWHP2:** beta(`r alphamu2`, `r betamu2`)  
+**Variance of the herd random effect:** inverse-gamma(`r round(alphasigmasq,3)`, `r round(betasigmasq,3)`)  
+**Variance of the additive parity random effect (primiparous cows):** inverse-gamma(`r round(alphasigm1sq,3)`, `r round(betasigm1sq,3)`)   
+**Variance of the additive parity random effect (multiparous cows):** inverse-gamma(`r round(alphasigm2sq,3)`, `r round(betasigm2sq,3)`)  
+
+## Estimates for the infection status of the herd  
+
+
+```{r, include=TRUE,  warning=FALSE}
+
+   
+  for (i in 1:4) {
+    sTable4[,i] <- paste0(sTable4[,i]*100, "%")
+  }
+
+ kable(sTable4,results = 'asis', digits = 1)
+ kable(Bayes_table_df, digits = 4)
+ 
+```
+```{r, include=FALSE,  warning=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+   
+##########################################################################
+# Plot
+
+# Extract draws from posterior
+  telep  = extract(PTBC_fit_H0)
+  CWHP1     = data.frame(x=telep$CWHP1, type="CWHP1")
+  CWHP2     = data.frame(x=telep$CWHP2, type="CWHP2")
+  CWHP1_mean  = sTable2[1,1]
+  CWHP2_mean  = sTable2[2,1]
+  AP1 = PTBCHerdDat$percent[1]
+  AP2 = PTBCHerdDat$percent[2]
+  
+    # for dinamic sizing
+quantiles <- quantile(CWHP1$x, probs = c(0.005, 0.995))
+
+x_min <- min(quantiles[1], CWHP1_mean, AP1) * 0.98
+x_max <- max(quantiles[2], CWHP1_mean, AP1) * 1.02
+
+# Creating plot
+# Blue vertical line: Apparent prevalence
+# Black vertical line: Estimated true prevalence
+# Green band: 95% credible interval for estimated true prevalence
+p1<-ggplot(CWHP1, aes(x = x, y = type, fill = factor(stat(quantile)))) +
+  stat_density_ridges(
+    geom = "density_ridges_gradient",
+    calc_ecdf = TRUE,
+    quantiles = c(0.025, 0.975),
+    scale=1
+  ) +
+  scale_fill_manual(
+    name = "Probability", values = c( "#A0A0A0A0", "lightgreen","#A0A0A0A0")
+  )+
+  theme_classic()+
+  labs(x="Posterior prevalence(%)", y="Density")+
+  scale_y_discrete(labels = c('Primiparous','Muliparous'))+
+  theme(legend.position = "none")+
+  geom_vline(xintercept = CWHP1_mean, col="black")+
+  geom_vline(xintercept = AP1, col="blue")+
+  ggtitle("Primiparous cows")+
+  theme(axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())+
+  theme(plot.title = element_text(hjust = 0.5))
+
+quantiles <- quantile(CWHP2$x, probs = c(0.005, 0.995))
+
+x_min <- min(quantiles[1], CWHP2_mean, AP2) * 0.98
+x_max <- max(quantiles[2], CWHP2_mean, AP2) * 1.02
+p2<-ggplot(CWHP2, aes(x = x, y = type, fill = factor(stat(quantile)))) +
+  stat_density_ridges(
+    geom = "density_ridges_gradient",
+    calc_ecdf = TRUE,
+    quantiles = c(0.025, 0.975),
+    scale=0.9
+  ) +
+  scale_fill_manual(
+    name = "Probability", values = c( "#A0A0A0A0", "lightgreen","#A0A0A0A0")
+  )+
+  theme_classic()+
+  labs(x="Posterior prevalence(%)", y="Density")+
+  scale_y_discrete(labels = c('Multiparous cows'))+
+  theme(legend.position = "none")+
+  geom_vline(xintercept = CWHP2_mean, col="black")+
+  geom_vline(xintercept = AP2, col="blue")+
+  ggtitle("Multiparous cows")+
+  theme(axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())+
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+\newpage
+## Plot of the apparent and the true prevalence
+
+Apparent prevalence: blue vertical line  
+True prevalence: black vertical line  
+95% CrI: green band  
+
+```{r pressure, echo=FALSE, warning=FALSE, message=FALSE}
+plot_grid(p1, p2)
+
+
+#Saving plot
+
+plot_name = "Graph"
+myfile <- paste0(plot_name,"_", params$countryname, "_", filename, "_", Sys.Date(), ".pdf")
+ggsave(filename=myfile, unit="in", width=10, height=5, device='pdf', dpi=300)
+
+
+```
+
