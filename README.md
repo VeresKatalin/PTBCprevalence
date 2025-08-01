@@ -3,8 +3,8 @@ R and Stan code for estimation of PTBC prevalence of correlated subgroups in dai
 
 **Estimation of Within-Herd PTBC Infection in Dairy Cattle Herds**
 
-**Input:** Csv datafile in long format, cow level data matching template.csv
-**Output:** Prevalence_countryname_datafilename_date.doc, Estimate_countryname_datafilename_date.xlsx, Graph_countryname_datafilename_date.pdf 
+**Input:** Csv datafile in long format, cow level data matching template.csv  
+**Output:** Prevalence_countryname_datafilename_date.doc, Estimate_countryname_datafilename_date.xlsx, Graph_countryname_datafilename_date.pdf  
 
 1. Save the project files in a folder
 2. Install RStudio if necessary
