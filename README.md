@@ -10,7 +10,7 @@ R and Stan code for estimation of PTBC prevalence of correlated subgroups in dai
 2. Install RStudio if necessary
 3. Create the input CSV file containing the cow data based on the template.csv file, or use the test.csv file
 4. Launch RStudio
-5. Install the following packages if necessary: RStan, Rmarkdown, knitr, ggplot2, cowplot, ggridges, openxlsx, stringr, brigdesampling
+5. Install the following packages if necessary: RStan, Rmarkdown, knitr, ggplot2, cowplot, ggridges, openxlsx, stringr, bridgesampling
 6. Open the parameters.r file
 - Set the working directory. Use \ or / as path separators depending on the operating system
 - Set the number of MCMC iterations (20.000 is the recommended value)
